@@ -29,7 +29,8 @@ import ndex.beta.layouts as layouts
         
 import ddot
 import ddot.config
-from ddot.utils import time_print, set_node_attributes_from_pandas, set_edge_attributes_from_pandas, nx_to_NdexGraph, NdexGraph_to_nx, parse_ndex_uuid, parse_ndex_server, make_index, update_nx_with_alignment, bubble_layout_nx, split_indices_chunk, invert_dict, make_network_public, nx_edges_to_pandas, nx_nodes_to_pandas, ig_edges_to_pandas, ig_nodes_to_pandas, melt_square, nx_set_tree_edges, gridify
+from ddot.utils import *
+import umap
 
 def _collapse_node(g,
                    v,
@@ -3467,7 +3468,7 @@ class Ontology(object):
                             node_attr=None,
                             node_alias='Original_Name',
                             z_score=False,
-                            spring_feature=None, spring_weight=1.0,
+                            spring_feature=None,
                             edge_groups=None,
                             max_num_edges = -1,
                             verbose=False):
@@ -3640,7 +3641,7 @@ class Ontology(object):
                     set_node_attributes_from_pandas(G_nx, node_attr)
 
                 G_nx.add_nodes_from(list(set(genes) - set(G_nx.nodes())))
-                
+
                 # Annotate the membership in children terms
                 children = ont.parent_2_child[t]
                 df = pd.DataFrame({c : None for c in children}, index=genes, dtype=bool)
@@ -3660,6 +3661,41 @@ class Ontology(object):
 
 
                 G = nx_to_NdexGraph(G_nx)
+
+                # New: compute a pre-layout to networks
+                if spring_feature != None:
+                    if len(G.nodes()) < 25:
+                        gsim = layouts._create_simple_graph(G)
+                        pos = nx.spring_layout(gsim, scale=200 * math.sqrt(gsim.number_of_nodes()),
+                                               weight=spring_feature)
+                        G.pos = pos
+                    else:
+                        mat = 1 - nx.to_numpy_matrix(nx.Graph(G),
+                                                     weight=spring_feature)  # make sure the matrix is symmetrical!!!
+                        fit = umap.UMAP(metric='precomputed', n_neighbors = min(15, int(np.sqrt(len(G.nodes())))))
+                        embedding = fit.fit_transform(mat)
+                        G.pos = {i: 200 * embedding[i, :] for i in range(embedding.shape[0])}
+
+                # geometric edge sampling (re-create the graph)
+                if network_sub.shape[0] > 10000:
+                    network_sub_sample = network_sub[[g1, g2, spring_feature]]
+                    Gnodes = {v[1]['name']: i for i, v in enumerate(G.nodes(data=True))}
+                    network_sub_sample.loc[:, 'v.x'] = np.array([G.pos[Gnodes[x]][0] for x in network_sub_sample[g1]])
+                    network_sub_sample.loc[:, 'v.y'] = np.array([G.pos[Gnodes[x]][1] for x in network_sub_sample[g1]])
+                    network_sub_sample.loc[:, 'u.x'] = np.array([G.pos[Gnodes[x]][0] for x in network_sub_sample[g2]])
+                    network_sub_sample.loc[:, 'u.y'] = np.array([G.pos[Gnodes[x]][1] for x in network_sub_sample[g2]])
+
+                    df_edge_sampled = geometric_edge_sampler(network_sub_sample, weight=spring_feature)
+                    edges_used = [(row[g1], row[g2]) for _, row in df_edge_sampled.iterrows()]
+                    all_edges = [(row[g1], row[g2]) for _, row in network_sub.iterrows()]
+                    edges_to_delete = list(set(all_edges).difference(edges_used))
+                    edges_to_delete = [(Gnodes[e[0]], Gnodes[e[1]]) for e in edges_to_delete] + [(Gnodes[e[1]], Gnodes[e[0]]) for e in edges_to_delete]
+
+                    G.remove_edges_from(edges_to_delete)
+
+                    # print(all_edges[:10], edges_to_delete[:10])
+                    # print(df_edge_sampled.shape[0], len(all_edges), len(edges_used), len(edges_to_delete))
+                    # print(len(G.edges()), G.edges(data=True)[0])
 
                 G.set_name('%s supporting network for %s' % (name, t))
                 G.set_network_attribute('Description', '%s supporting network for %s' % (name, t))
@@ -3693,7 +3729,7 @@ class Ontology(object):
 
 
                 # New: only keep the biggest compoent in the network
-                G = max(nx.weakly_connected_component_subgraphs(G), key=len)
+                # G = max(nx.weakly_connected_component_subgraphs(G), key=len)
                 # # further remove degree == 1 nodes
                 # if len(G.nodes()) > 6:
                 #     low_deg_nodes = []
@@ -3707,16 +3743,6 @@ class Ontology(object):
                 #         for v, deg in G.degree().items():
                 #             if deg <= 1:
                 #                 low_deg_nodes.append(v)
-
-                # New: compute a pre-layout to networks
-                if spring_feature != None:
-                    # G_cx = G.to_cx() # why converted back and forth
-                    # G = NdexGraph(G_cx)
-                    gsim = layouts._create_simple_graph(G)
-                    pos = nx.spring_layout(gsim, scale=200 * math.sqrt(gsim.number_of_nodes()), weight=spring_feature)
-                    G.pos = pos
-                    # layouts.apply_directed_flow_layout(G, node_width=50, weight=spring_feature)
-
 
                 start_upload = time.time()
                 ndex_url = G.upload_to(ndex_server, ndex_user, ndex_pass, visibility=visibility)

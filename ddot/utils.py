@@ -19,6 +19,32 @@ from ndex.networkn import NdexGraph
 import ddot
 import ddot.config
 
+def geometric_edge_sampler(df, weight='Score', target_n_edges = 50000, bias_distance = 1.0, bias_weight = 0.5):
+    '''
+
+    :param df: the data frame should contain 'v.x|y' and 'u.x|y'
+    :param total: total number of edges to sample. Default 50000
+    :param bias_distance:
+    :param bias_weight:
+    :return:
+    '''
+    df['distance'] = np.sqrt( (df['v.x']-df['u.x'])**2 + (df['v.y']-df['u.y'])**2 )
+    df['distance.factor'] = np.exp(-bias_distance * df['distance'])
+    df['distance.factor'] /= df['distance.factor'].sum()
+    df['weight.factor'] = np.exp(-bias_weight * (1-df[weight]))
+    df['weight.factor'] /= df['weight.factor'].sum()
+    df['combined.factor'] = df['distance.factor'] * df['weight.factor']
+    df['combined.factor'] /= df['combined.factor'].sum()
+
+    df_out = df.loc[df['combined.factor'] >0, :]
+    if df_out.shape[0] <= target_n_edges:
+        return df_out
+    # sample edges
+    np.random.seed(0)
+    rc = np.sort(np.random.choice(np.arange(df.shape[0]), size=target_n_edges, replace=False, p=np.array(df['combined.factor'])))
+    df_out = df.iloc[rc, :]
+    return df_out
+
 def print_time(*s):
     print(' '.join(map(str, s)), datetime.today())
     sys.stdout.flush()

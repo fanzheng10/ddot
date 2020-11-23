@@ -113,7 +113,7 @@ def create_term_to_uuid(ont, hname, terms, subnet_links, subnet_size, rf_score, 
         term_uuid = ont.upload_subnets_ndex(network=net_data, main_feature='Score',
                                             name=hname, terms=terms,
         ndex_server=ndex_server, ndex_user=ndex_user, ndex_pass=ndex_pass,
-                                            spring_feature='Score', spring_weight = 1.0,
+                                            spring_feature='Score',
                                             edge_groups = dict_edge_group, max_num_edges = args.max_num_edges,
                                             verbose=False)  ## by default is public
 
